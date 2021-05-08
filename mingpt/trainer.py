@@ -2,7 +2,7 @@
 Simple training loop; Boilerplate that could apply to any arbitrary neural network,
 so nothing in this file really has anything to do with GPT specifically.
 """
-from comet_ml import Experiment
+from comet_utils import CometLogger
 import math
 import logging
 
@@ -31,6 +31,7 @@ class TrainerConfig:
     # checkpoint settings
     ckpt_path = None
     num_workers = 0 # for DataLoader
+    comet = False # comet logging
 
     def __init__(self, **kwargs):
         for k,v in kwargs.items():
@@ -49,18 +50,18 @@ class Trainer:
         if torch.cuda.is_available():
             self.device = torch.cuda.current_device()
             self.model = torch.nn.DataParallel(self.model).to(self.device)
-        self._experiment = Experiment(auto_metric_logging=False)
-        self._experiment.log_others(vars(self.config))
-        self._experiment.log_code('./mingpt/utils.py')
-        self._experiment.log_code('./mingpt/model.py')
-        self._experiment.log_code('./mingpt/trainer.py')
+        self._comet_logger = CometLogger(config.comet, auto_metric_logging=False)
+        self._comet_logger.log_others(vars(self.config))
+        self._comet_logger.log_code('./mingpt/utils.py')
+        self._comet_logger.log_code('./mingpt/model.py')
+        self._comet_logger.log_code('./mingpt/trainer.py')
 
     def save_checkpoint(self):
         # DataParallel wrappers keep raw model object in .module attribute
         raw_model = self.model.module if hasattr(self.model, "module") else self.model
         logger.info("saving %s", self.config.ckpt_path)
         torch.save(raw_model.state_dict(), self.config.ckpt_path)
-        self._experiment.log_model('minGPT', self.config.ckpt_path)
+        self._comet_logger.log_model('minGPT', self.config.ckpt_path)
 
     def train(self):
         model, config = self.model, self.config
@@ -88,10 +89,10 @@ class Trainer:
                     logits, loss = model(x, y)
                     loss = loss.mean() # collapse all losses if they are scattered on multiple gpus
                     losses.append(loss.item())
-                    self._experiment.log_metric("{}_loss".format(split),
-                                                loss.item(),
-                                                step=((epoch_num*len(loader))+it),
-                                                epoch=epoch_num)
+                    self._comet_logger.log_metric("{}_loss".format(split),
+                                                  loss.item(),
+                                                  step=((epoch_num*len(loader))+it),
+                                                  epoch=epoch_num)
 
                 if is_train:
 
@@ -112,16 +113,16 @@ class Trainer:
                             progress = float(self.tokens - config.warmup_tokens) / float(max(1, config.final_tokens - config.warmup_tokens))
                             lr_mult = max(0.1, 0.5 * (1.0 + math.cos(math.pi * progress)))
                         lr = config.learning_rate * lr_mult
-                        self._experiment.log_metric("lr", lr,
-                                                    step=((epoch_num*len(loader))+it),
-                                                    epoch=epoch_num)
+                        self._comet_logger.log_metric("lr", lr,
+                                                      step=((epoch_num*len(loader))+it),
+                                                      epoch=epoch_num)
                         for param_group in optimizer.param_groups:
                             param_group['lr'] = lr
                     else:
                         lr = config.learning_rate
-                        self._experiment.log_metric("lr", lr,
-                                                    step=((epoch_num*len(loader))+it),
-                                                    epoch=epoch_num)
+                        self._comet_logger.log_metric("lr", lr,
+                                                      step=((epoch_num*len(loader))+it),
+                                                      epoch=epoch_num)
 
                     # report progress
                     pbar.set_description(f"epoch {epoch+1} iter {it}: train loss {loss.item():.5f}. lr {lr:e}")
